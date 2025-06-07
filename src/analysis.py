@@ -1,7 +1,8 @@
 """
-DataInf 데이터셋 품질 분석 모듈
+DataInf 다중 데이터셋 품질 분석 모듈
 
-이 모듈은 생성된 데이터셋들의 품질을 종합적으로 분석하는 기능을 제공합니다.
+이 모듈은 다양한 데이터셋(alpaca, gsm8k, sst2, mrpc)으로 생성된
+노이즈 데이터셋들의 품질을 종합적으로 분석하는 기능을 제공합니다.
 """
 
 import os
@@ -25,82 +26,542 @@ def print_separator(title="", char="=", length=60):
 
 
 def run_quality_analysis():
-    """강화된 품질 분석 모드"""
-    print_separator("데이터셋 품질 분석", "=", 70)
+    """다중 데이터셋 품질 분석 모드"""
+    print_separator("다중 데이터셋 품질 분석", "=", 70)
 
-    from .data_loader import AlpacaDataLoader
-    loader = AlpacaDataLoader()
+    from .data_loader import MultiDatasetLoader
+    loader = MultiDatasetLoader()
 
-    # 기존 파일들 찾기
-    data_files = [f for f in os.listdir("./data") if f.startswith("alpaca_") and f.endswith(".json")]
+    # 기존 파일들 찾기 및 데이터셋별 분류
+    data_files = [f for f in os.listdir("./data") if f.endswith(".json")]
 
     if not data_files:
         print("분석할 데이터 파일이 없습니다.")
         return
 
-    # 파일 분류 및 기본 정보
-    original_files = [f for f in data_files if "original" in f]
-    demo_files = [f for f in data_files if "demo" in f and "original" not in f]
-    full_files = [f for f in data_files if "full" in f and "original" not in f]
+    # 데이터셋별로 파일 분류
+    datasets = {
+        'alpaca': [],
+        'gsm8k': [],
+        'sst2': [],
+        'mrpc': []
+    }
 
-    print(f"발견된 데이터 파일: {len(data_files)}개")
-    print(f"   - 원본 파일: {len(original_files)}개")
-    print(f"   - 데모 파일: {len(demo_files)}개")
-    print(f"   - 전체 실험 파일: {len(full_files)}개")
+    other_files = []
+
+    for file in data_files:
+        classified = False
+        for dataset_name in datasets.keys():
+            if file.startswith(dataset_name):
+                datasets[dataset_name].append(file)
+                classified = True
+                break
+        if not classified:
+            other_files.append(file)
+
+    # 전체 파일 현황
+    total_files = sum(len(files) for files in datasets.values()) + len(other_files)
+    print(f"발견된 데이터 파일: {total_files}개")
+
+    for dataset_name, files in datasets.items():
+        if files:
+            original_count = len([f for f in files if "original" in f])
+            experiment_count = len(files) - original_count
+            print(f"   - {dataset_name.upper()}: {len(files)}개 (원본: {original_count}, 실험: {experiment_count})")
+
+    if other_files:
+        print(f"   - 기타: {len(other_files)}개")
 
     # 분석 옵션 선택
     print(f"\n분석 옵션:")
-    print("1. 파일 기본 정보")
-    print("2. 데모 파일 상세 분석")
-    print("3. 전체 파일 상세 분석 (시간 소요)")
-    print("4. 파일 간 비교 분석")
-    print("5. 노이즈 전략별 효과 분석")
+    print("1. 전체 파일 기본 정보")
+    print("2. 데이터셋별 상세 분석")
+    print("3. 데이터셋간 노이즈 효과 비교")
+    print("4. 특정 데이터셋 집중 분석")
+    print("5. 라벨 보존 검증 (Classification 데이터셋)")
     print("6. 전체 종합 분석")
 
     choice = input("\n선택하세요 (1-6, 또는 Enter로 기본 정보): ").strip()
 
     if choice == "1" or choice == "":
-        analyze_file_basic_info(data_files)
+        analyze_all_files_basic_info(datasets, other_files)
     elif choice == "2":
-        analyze_demo_files_detailed(demo_files, original_files, loader)
+        analyze_by_dataset_detailed(datasets, loader)
     elif choice == "3":
-        analyze_full_files_detailed(full_files, original_files, loader)
+        analyze_cross_dataset_comparison(datasets, loader)
     elif choice == "4":
-        analyze_file_comparison(data_files, loader)
+        analyze_specific_dataset(datasets, loader)
     elif choice == "5":
-        analyze_strategy_effects(data_files, loader)
+        analyze_label_preservation(datasets, loader)
     elif choice == "6":
-        run_comprehensive_analysis(data_files, loader)
+        run_comprehensive_multi_dataset_analysis(datasets, loader)
     else:
         print("올바르지 않은 선택입니다.")
 
 
-def analyze_file_basic_info(data_files):
-    """파일 기본 정보 분석"""
-    print_separator("파일 기본 정보", "-")
+def analyze_all_files_basic_info(datasets, other_files):
+    """전체 파일 기본 정보 분석"""
+    print_separator("전체 파일 기본 정보", "-")
 
-    file_info = []
-    for file in sorted(data_files):
-        filepath = os.path.join("./data", file)
-        file_size = os.path.getsize(filepath) / (1024 * 1024)  # MB
+    # 테이블 헤더
+    print(f"{'파일명':<60} {'데이터셋':<10} {'타입':<12} {'샘플수':<8} {'노이즈%':<8} {'전략':<15} {'크기(MB)':<10}")
+    print("=" * 130)
 
-        # 파일명에서 정보 추출
-        info = parse_filename_info(file)
-        info['filename'] = file
-        info['size_mb'] = file_size
-        file_info.append(info)
+    # 데이터셋별 파일 정보
+    for dataset_name, files in datasets.items():
+        if not files:
+            continue
 
-    # 표 형태로 출력
-    print(f"{'파일명':<50} {'타입':<12} {'샘플수':<8} {'노이즈%':<8} {'전략':<15} {'크기(MB)':<10}")
-    print("=" * 110)
+        for file in sorted(files):
+            info = parse_filename_info(file, dataset_name)
+            filepath = os.path.join("./data", file)
+            file_size = os.path.getsize(filepath) / (1024 * 1024) if os.path.exists(filepath) else 0
 
-    for info in file_info:
-        print(f"{info['filename']:<50} {info['type']:<12} {info['samples']:<8} "
-              f"{info['noise_percent']:<8} {info['strategy']:<15} {info['size_mb']:<10.1f}")
+            print(f"{file:<60} {dataset_name:<10} {info['type']:<12} {info['samples']:<8} "
+                  f"{info['noise_percent']:<8} {info['strategy']:<15} {file_size:<10.1f}")
+
+    # 기타 파일들
+    if other_files:
+        print("\n기타 파일들:")
+        for file in sorted(other_files):
+            filepath = os.path.join("./data", file)
+            file_size = os.path.getsize(filepath) / (1024 * 1024) if os.path.exists(filepath) else 0
+            print(f"{file:<60} {'unknown':<10} {'unknown':<12} {'N/A':<8} "
+                  f"{'N/A':<8} {'N/A':<15} {file_size:<10.1f}")
 
 
-def parse_filename_info(filename):
-    """파일명에서 정보 추출"""
+def analyze_by_dataset_detailed(datasets, loader):
+    """데이터셋별 상세 분석"""
+    print_separator("데이터셋별 상세 분석", "-")
+
+    for dataset_name, files in datasets.items():
+        if not files:
+            continue
+
+        print(f"\n🔍 {dataset_name.upper()} 데이터셋 분석")
+        print("=" * 50)
+
+        # 원본 파일과 노이즈 파일 분리
+        original_files = [f for f in files if "original" in f]
+        noise_files = [f for f in files if "original" not in f]
+
+        print(f"원본 파일: {len(original_files)}개")
+        print(f"노이즈 파일: {len(noise_files)}개")
+
+        if not original_files:
+            print("   ⚠️  원본 파일이 없어 분석을 건너뜁니다.")
+            continue
+
+        # 대표 원본 파일 (가장 큰 것)
+        main_original = max(original_files, key=lambda f: os.path.getsize(os.path.join("./data", f)))
+        print(f"분석 기준 원본: {main_original}")
+
+        # 원본 데이터 로드
+        original_df = loader.load_saved_dataset(main_original)
+        if original_df is None:
+            print("   ⚠️  원본 파일 로드 실패")
+            continue
+
+        print(f"원본 데이터: {len(original_df):,}개 샘플")
+
+        # 데이터셋별 특성 분석
+        analyze_dataset_characteristics(original_df, dataset_name)
+
+        # 노이즈 파일들 분석
+        if noise_files:
+            print(f"\n📊 노이즈 파일 분석:")
+
+            for noise_file in sorted(noise_files)[:3]:  # 최대 3개만
+                print(f"\n   분석 중: {noise_file}")
+
+                noisy_df = loader.load_saved_dataset(noise_file)
+                if noisy_df is None:
+                    continue
+
+                # 노이즈 인덱스 추정
+                noisy_indices = estimate_noisy_indices(original_df, noisy_df, dataset_name)
+
+                # 분석 실행
+                analysis = analyze_noise_distribution(noisy_df, original_df, noisy_indices, dataset_name)
+
+                # 결과 출력
+                print(f"      - 전체 샘플: {analysis['total_samples']:,}개")
+                print(f"      - 추정 노이즈: {len(noisy_indices):,}개 ({len(noisy_indices)/len(original_df)*100:.1f}%)")
+                print(f"      - 실제 변경: {analysis['actual_changes']:,}개")
+                print(f"      - 평균 길이 변화: {analysis['avg_length_change']:.1f} 문자")
+
+
+def analyze_cross_dataset_comparison(datasets, loader):
+    """데이터셋간 노이즈 효과 비교"""
+    print_separator("데이터셋간 노이즈 효과 비교", "-")
+
+    # 각 데이터셋의 20% balanced 노이즈 파일 찾기
+    comparison_files = {}
+
+    for dataset_name, files in datasets.items():
+        if not files:
+            continue
+
+        # 20% balanced 파일 찾기
+        target_files = [f for f in files if "20percent" in f and "balanced" in f and "original" not in f]
+        if target_files:
+            comparison_files[dataset_name] = target_files[0]
+
+    if len(comparison_files) < 2:
+        print("비교할 데이터셋이 부족합니다. (각 데이터셋에 20% balanced 노이즈 파일 필요)")
+        return
+
+    print(f"비교 대상: {list(comparison_files.keys())}")
+    print(f"분석 조건: 20% balanced 노이즈")
+
+    # 비교 결과 수집
+    comparison_results = {}
+
+    for dataset_name, noise_file in comparison_files.items():
+        print(f"\n📊 {dataset_name.upper()} 분석 중...")
+
+        # 원본 파일 찾기
+        original_files = [f for f in datasets[dataset_name] if "original" in f]
+        if not original_files:
+            continue
+
+        original_file = original_files[0]
+
+        # 데이터 로드
+        original_df = loader.load_saved_dataset(original_file)
+        noisy_df = loader.load_saved_dataset(noise_file)
+
+        if original_df is None or noisy_df is None:
+            continue
+
+        # 노이즈 인덱스 추정 및 분석
+        noisy_indices = estimate_noisy_indices(original_df, noisy_df, dataset_name)
+        analysis = analyze_noise_distribution(noisy_df, original_df, noisy_indices, dataset_name)
+
+        comparison_results[dataset_name] = {
+            'total_samples': len(original_df),
+            'target_noise_samples': len(noisy_indices),
+            'actual_changes': analysis['actual_changes'],
+            'actual_noise_ratio': analysis['actual_noise_ratio'],
+            'avg_length_change': analysis['avg_length_change'],
+            'field_changes': analysis['field_changes']
+        }
+
+    # 비교 결과 출력
+    print_separator("데이터셋간 비교 결과", "-")
+
+    print(f"{'데이터셋':<10} {'총 샘플':<10} {'노이즈 대상':<12} {'실제 변경':<12} {'실제 비율':<10} {'길이 변화':<10}")
+    print("-" * 70)
+
+    for dataset_name, result in comparison_results.items():
+        print(f"{dataset_name:<10} {result['total_samples']:<10,} {result['target_noise_samples']:<12,} "
+              f"{result['actual_changes']:<12,} {result['actual_noise_ratio']*100:<9.1f}% {result['avg_length_change']:<10.1f}")
+
+    # 노이즈 효과성 분석
+    print(f"\n📈 노이즈 효과성 순위:")
+    sorted_results = sorted(comparison_results.items(),
+                          key=lambda x: x[1]['actual_noise_ratio'], reverse=True)
+
+    for i, (dataset_name, result) in enumerate(sorted_results, 1):
+        effectiveness = result['actual_changes'] / result['target_noise_samples'] * 100
+        print(f"{i}. {dataset_name.upper()}: {effectiveness:.1f}% 효과성 "
+              f"(목표 {result['target_noise_samples']:,}개 → 실제 {result['actual_changes']:,}개)")
+
+
+def analyze_specific_dataset(datasets, loader):
+    """특정 데이터셋 집중 분석"""
+    print_separator("특정 데이터셋 집중 분석", "-")
+
+    # 데이터셋 선택
+    available_datasets = [name for name, files in datasets.items() if files]
+
+    if not available_datasets:
+        print("분석할 데이터셋이 없습니다.")
+        return
+
+    print("분석 가능한 데이터셋:")
+    for i, dataset_name in enumerate(available_datasets, 1):
+        file_count = len(datasets[dataset_name])
+        print(f"{i}. {dataset_name.upper()} ({file_count}개 파일)")
+
+    try:
+        choice = int(input("선택하세요: ")) - 1
+        selected_dataset = available_datasets[choice]
+    except (ValueError, IndexError):
+        print("잘못된 선택입니다.")
+        return
+
+    print(f"\n🎯 {selected_dataset.upper()} 집중 분석")
+    print("=" * 50)
+
+    files = datasets[selected_dataset]
+
+    # 파일 분류
+    original_files = [f for f in files if "original" in f]
+    demo_files = [f for f in files if "demo" in f and "original" not in f]
+    full_files = [f for f in files if "full" in f and "original" not in f]
+
+    print(f"원본 파일: {len(original_files)}개")
+    print(f"데모 파일: {len(demo_files)}개")
+    print(f"전체 파일: {len(full_files)}개")
+
+    # 원본 데이터 특성
+    if original_files:
+        main_original = original_files[0]
+        original_df = loader.load_saved_dataset(main_original)
+        if original_df is not None:
+            print(f"\n📋 데이터셋 특성:")
+            analyze_dataset_characteristics(original_df, selected_dataset)
+
+    # 노이즈 전략별 분석
+    if demo_files or full_files:
+        print(f"\n📊 노이즈 전략별 효과:")
+
+        target_files = demo_files if demo_files else full_files
+        strategy_results = {}
+
+        for file in target_files:
+            info = parse_filename_info(file, selected_dataset)
+            strategy = info['strategy']
+            noise_percent = info['noise_percent']
+
+            if strategy not in strategy_results:
+                strategy_results[strategy] = []
+
+            strategy_results[strategy].append({
+                'file': file,
+                'noise_percent': noise_percent
+            })
+
+        for strategy, file_info_list in strategy_results.items():
+            print(f"\n   {strategy} 전략:")
+            for file_info in file_info_list:
+                print(f"      - {file_info['file']} (노이즈: {file_info['noise_percent']})")
+
+
+def analyze_label_preservation(datasets, loader):
+    """라벨 보존 검증 (Classification 데이터셋)"""
+    print_separator("라벨 보존 검증", "-")
+
+    # Classification 데이터셋만 선택
+    classification_datasets = ['gsm8k', 'sst2', 'mrpc']
+    available_classification = {name: files for name, files in datasets.items()
+                              if name in classification_datasets and files}
+
+    if not available_classification:
+        print("라벨 보존 검증이 가능한 Classification 데이터셋이 없습니다.")
+        print("필요한 데이터셋: gsm8k, sst2, mrpc")
+        return
+
+    print(f"검증 대상 데이터셋: {list(available_classification.keys())}")
+
+    from .noise_injection import MultiDatasetNoiseInjector
+    injector = MultiDatasetNoiseInjector()
+
+    for dataset_name, files in available_classification.items():
+        print(f"\n🔍 {dataset_name.upper()} 라벨 보존 검증")
+        print("-" * 40)
+
+        config = injector.dataset_configs.get(dataset_name, {})
+        label_columns = config.get('label_columns', [])
+
+        if not label_columns:
+            print("   라벨 컬럼이 정의되지 않음")
+            continue
+
+        print(f"   검증 라벨: {label_columns}")
+
+        # 원본 파일과 노이즈 파일 찾기
+        original_files = [f for f in files if "original" in f]
+        noise_files = [f for f in files if "original" not in f]
+
+        if not original_files or not noise_files:
+            print("   원본 또는 노이즈 파일이 없음")
+            continue
+
+        # 대표 파일들로 검증
+        original_file = original_files[0]
+
+        print(f"   원본 파일: {original_file}")
+
+        original_df = loader.load_saved_dataset(original_file)
+        if original_df is None:
+            continue
+
+        label_preservation_results = {}
+
+        for noise_file in noise_files[:3]:  # 최대 3개 파일만 검증
+            print(f"\n   검증 중: {noise_file}")
+
+            noisy_df = loader.load_saved_dataset(noise_file)
+            if noisy_df is None:
+                continue
+
+            # 라벨 변경 여부 확인
+            label_changes = {}
+            total_samples = min(len(original_df), len(noisy_df))
+
+            for label_col in label_columns:
+                if label_col in original_df.columns and label_col in noisy_df.columns:
+                    changes = 0
+                    for i in range(total_samples):
+                        if original_df.iloc[i][label_col] != noisy_df.iloc[i][label_col]:
+                            changes += 1
+                    label_changes[label_col] = changes
+                else:
+                    label_changes[label_col] = "컬럼 없음"
+
+            label_preservation_results[noise_file] = label_changes
+
+            # 결과 출력
+            for label_col, changes in label_changes.items():
+                if isinstance(changes, int):
+                    if changes == 0:
+                        print(f"      ✅ {label_col}: 완벽 보존 (변경 0개)")
+                    else:
+                        print(f"      ❌ {label_col}: {changes}개 변경됨 ({changes/total_samples*100:.2f}%)")
+                else:
+                    print(f"      ⚠️  {label_col}: {changes}")
+
+        # 요약
+        if label_preservation_results:
+            print(f"\n   📊 {dataset_name.upper()} 라벨 보존 요약:")
+            perfect_preservation = 0
+            total_files = len(label_preservation_results)
+
+            for noise_file, label_changes in label_preservation_results.items():
+                all_preserved = all(changes == 0 for changes in label_changes.values()
+                                  if isinstance(changes, int))
+                if all_preserved:
+                    perfect_preservation += 1
+
+            print(f"      완벽 보존 파일: {perfect_preservation}/{total_files}개")
+            if perfect_preservation == total_files:
+                print(f"      ✅ 모든 파일에서 라벨이 완벽하게 보존됨!")
+            else:
+                print(f"      ⚠️  일부 파일에서 라벨 변경 발생")
+
+
+def run_comprehensive_multi_dataset_analysis(datasets, loader):
+    """전체 종합 분석 (다중 데이터셋)"""
+    print_separator("다중 데이터셋 종합 분석", "=", 70)
+
+    print("종합 분석을 시작합니다...")
+    print("   이 분석은 모든 데이터셋을 종합적으로 분석하며 시간이 걸릴 수 있습니다.")
+
+    confirm = input("계속 진행하시겠습니까? (y/N): ").strip().lower()
+    if confirm != 'y':
+        return
+
+    # 1. 전체 현황
+    print("\n" + "=" * 50)
+    print("1. 전체 현황")
+    print("=" * 50)
+    analyze_all_files_basic_info(datasets, [])
+
+    # 2. 데이터셋별 요약
+    print("\n" + "=" * 50)
+    print("2. 데이터셋별 요약")
+    print("=" * 50)
+
+    total_datasets = 0
+    total_files = 0
+
+    for dataset_name, files in datasets.items():
+        if files:
+            total_datasets += 1
+            total_files += len(files)
+
+            original_count = len([f for f in files if "original" in f])
+            noise_count = len(files) - original_count
+
+            print(f"{dataset_name.upper()}:")
+            print(f"   - 총 파일: {len(files)}개")
+            print(f"   - 원본: {original_count}개")
+            print(f"   - 노이즈: {noise_count}개")
+
+            # 노이즈 전략 분포
+            strategies = set()
+            noise_ratios = set()
+
+            for file in files:
+                if "original" not in file:
+                    info = parse_filename_info(file, dataset_name)
+                    if info['strategy'] != 'N/A':
+                        strategies.add(info['strategy'])
+                    if info['noise_percent'] != 'N/A':
+                        noise_ratios.add(info['noise_percent'])
+
+            if strategies:
+                print(f"   - 테스트된 전략: {', '.join(strategies)}")
+            if noise_ratios:
+                print(f"   - 테스트된 노이즈 비율: {', '.join(sorted(noise_ratios))}")
+            print()
+
+    # 3. 데이터셋간 비교
+    if total_datasets > 1:
+        print("\n" + "=" * 50)
+        print("3. 데이터셋간 비교")
+        print("=" * 50)
+        analyze_cross_dataset_comparison(datasets, loader)
+
+    # 4. 라벨 보존 검증
+    print("\n" + "=" * 50)
+    print("4. 라벨 보존 검증")
+    print("=" * 50)
+    analyze_label_preservation(datasets, loader)
+
+    # 5. 최종 요약
+    print("\n" + "=" * 50)
+    print("5. 최종 요약")
+    print("=" * 50)
+
+    print(f"전체 현황:")
+    print(f"  - 활성 데이터셋: {total_datasets}개")
+    print(f"  - 총 파일 수: {total_files}개")
+
+    # DataInf 실험 준비도 체크
+    print(f"\nDataInf 실험 준비도:")
+
+    ready_datasets = []
+
+    for dataset_name, files in datasets.items():
+        if not files:
+            continue
+
+        has_original = any("original" in f for f in files)
+        has_noise = any("original" not in f for f in files)
+        has_multiple_ratios = len(set(parse_filename_info(f, dataset_name)['noise_percent']
+                                    for f in files if parse_filename_info(f, dataset_name)['noise_percent'] != 'N/A')) > 1
+
+        dataset_readiness = sum([has_original, has_noise, has_multiple_ratios])
+
+        print(f"  {dataset_name.upper()}:")
+        print(f"    - 원본 데이터: {'✅' if has_original else '❌'}")
+        print(f"    - 노이즈 데이터: {'✅' if has_noise else '❌'}")
+        print(f"    - 다양한 비율: {'✅' if has_multiple_ratios else '❌'}")
+
+        if dataset_readiness == 3:
+            print(f"    📊 준비도: 완벽 (3/3) - 실험 가능!")
+            ready_datasets.append(dataset_name)
+        elif dataset_readiness == 2:
+            print(f"    📊 준비도: 양호 (2/3) - 추가 데이터 권장")
+        else:
+            print(f"    📊 준비도: 부족 ({dataset_readiness}/3) - 데이터 생성 필요")
+
+    if ready_datasets:
+        print(f"\n🎉 실험 준비 완료된 데이터셋: {', '.join(ready_datasets)}")
+        print(f"   이제 LoRA 학습 담당자에게 데이터를 전달할 수 있습니다!")
+    else:
+        print(f"\n⚠️  아직 실험 준비가 완료된 데이터셋이 없습니다.")
+
+    print(f"\n다중 데이터셋 종합 분석이 완료되었습니다!")
+
+
+# 헬퍼 함수들
+
+def parse_filename_info(filename, dataset_name):
+    """데이터셋별 파일명 정보 추출"""
     info = {
         'type': 'unknown',
         'samples': 'N/A',
@@ -137,371 +598,72 @@ def parse_filename_info(filename):
     return info
 
 
-def analyze_demo_files_detailed(demo_files, original_files, loader):
-    """데모 파일 상세 분석"""
-    print_separator("데모 파일 상세 분석", "-")
-
-    if not demo_files:
-        print("분석할 데모 파일이 없습니다.")
-        return
-
-    # 원본 데모 파일 찾기
-    original_demo = [f for f in original_files if 'demo' in f]
-    if not original_demo:
-        print("원본 데모 파일을 찾을 수 없습니다.")
-        return
-
-    print(f"원본 파일: {original_demo[0]}")
-
-    # 원본 데이터 로드
-    original_df = loader.load_saved_dataset(original_demo[0])
-    if original_df is None:
-        return
-
-    print(f"원본 데이터 로드: {len(original_df)}개 샘플")
-
-    # 각 노이즈 파일 분석
-    for demo_file in sorted(demo_files):
-        print(f"\n분석 중: {demo_file}")
-
-        # 노이즈 파일 로드
-        noisy_df = loader.load_saved_dataset(demo_file)
-        if noisy_df is None:
-            continue
-
-        # 노이즈 인덱스 추정
-        noisy_indices = []
-        for i in range(len(original_df)):
-            if (original_df.iloc[i]['instruction'] != noisy_df.iloc[i]['instruction'] or
-                    original_df.iloc[i]['output'] != noisy_df.iloc[i]['output']):
-                noisy_indices.append(i)
-
-        # 분석 실행
-        analysis = analyze_noise_distribution(noisy_df, original_df, noisy_indices)
-
-        # 결과 출력
-        print(f"    분석 결과:")
-        print(f"      - 전체 샘플: {analysis['total_samples']}개")
-        print(f"      - 노이즈 대상: {analysis['noisy_samples']}개")
-        print(f"      - 실제 변경: {analysis['actual_changes']}개 ({analysis['actual_noise_ratio'] * 100:.1f}%)")
-        print(f"      - 평균 길이 변화: {analysis['avg_length_change']:.1f} 문자")
-        print(
-            f"      - 필드별 변경: Instruction {analysis['field_changes']['instruction']}개, Output {analysis['field_changes']['output']}개")
-
-        # 변경 유형 분석
-        change_types = analysis['change_types']
-        total_changes = sum(change_types.values())
-        if total_changes > 0:
-            print(f"      - 변경 유형:")
-            for change_type, count in change_types.items():
-                percentage = (count / total_changes) * 100
-                print(f"        * {change_type}: {count}개 ({percentage:.1f}%)")
-
-        # 샘플 비교
-        if len(noisy_indices) >= 2:
-            print(f"    샘플 비교 (2개):")
-            compare_samples(original_df, noisy_df, noisy_indices[:2], num_examples=2)
-
-
-def analyze_full_files_detailed(full_files, original_files, loader):
-    """전체 파일 상세 분석 (시간 소요)"""
-    print_separator("전체 파일 상세 분석", "-")
-
-    if not full_files:
-        print("분석할 전체 파일이 없습니다.")
-        return
-
-    print("전체 파일 분석은 시간이 오래 걸릴 수 있습니다.")
-    confirm = input("계속 진행하시겠습니까? (y/N): ").strip().lower()
-
-    if confirm != 'y':
-        print("분석이 취소되었습니다.")
-        return
-
-    # 원본 전체 파일 찾기
-    original_full = [f for f in original_files if 'full' in f]
-    if not original_full:
-        print("원본 전체 파일을 찾을 수 없습니다.")
-        return
-
-    print(f"원본 파일: {original_full[0]} (로딩 중...)")
-
-    # 원본 데이터 로드
-    start_time = time.time()
-    original_df = loader.load_saved_dataset(original_full[0])
-    load_time = time.time() - start_time
-
-    if original_df is None:
-        return
-
-    print(f"원본 데이터 로드: {len(original_df)}개 샘플 ({load_time:.1f}초)")
-
-    # 각 실험 파일 분석
-    analysis_results = {}
-
-    for full_file in sorted(full_files):
-        print(f"\n분석 중: {full_file}")
-        file_start_time = time.time()
-
-        # 노이즈 파일 로드
-        noisy_df = loader.load_saved_dataset(full_file)
-        if noisy_df is None:
-            continue
-
-        # 변경된 인덱스 찾기 (샘플링으로 빠르게)
-        sample_size = min(1000, len(original_df))  # 1000개 샘플로 추정
-        sample_indices = random.sample(range(len(original_df)), sample_size)
-
-        noisy_indices_sample = []
-        for i in sample_indices:
-            if (original_df.iloc[i]['instruction'] != noisy_df.iloc[i]['instruction'] or
-                    original_df.iloc[i]['output'] != noisy_df.iloc[i]['output']):
-                noisy_indices_sample.append(i)
-
-        # 전체 비율로 추정
-        estimated_noise_ratio = len(noisy_indices_sample) / len(sample_indices)
-        estimated_total_noisy = int(len(original_df) * estimated_noise_ratio)
-
-        file_analysis_time = time.time() - file_start_time
-
-        # 결과 저장
-        file_info = parse_filename_info(full_file)
-        analysis_results[full_file] = {
-            'file_info': file_info,
-            'estimated_noise_ratio': estimated_noise_ratio,
-            'estimated_total_noisy': estimated_total_noisy,
-            'sample_size': sample_size,
-            'analysis_time': file_analysis_time
-        }
-
-        # 결과 출력
-        print(f"    추정 결과 (샘플 {sample_size}개 기준):")
-        print(f"      - 추정 노이즈 비율: {estimated_noise_ratio * 100:.1f}%")
-        print(f"      - 추정 변경 샘플: {estimated_total_noisy:,}개")
-        print(f"      - 분석 시간: {file_analysis_time:.1f}초")
-
-    # 요약 출력
-    print_separator("전체 파일 분석 요약", "-")
-    print(f"{'파일명':<50} {'설정 노이즈%':<12} {'실제 노이즈%':<12} {'변경 샘플수':<12}")
-    print("=" * 90)
-
-    for filename, result in analysis_results.items():
-        file_info = result['file_info']
-        print(f"{filename:<50} {file_info['noise_percent']:<12} "
-              f"{result['estimated_noise_ratio'] * 100:<11.1f}% {result['estimated_total_noisy']:<12,}")
-
-
-def analyze_file_comparison(data_files, loader):
-    """파일 간 비교 분석"""
-    print_separator("파일 간 비교 분석", "-")
-
-    # 사용자가 비교할 파일 선택
-    print("비교 가능한 파일:")
-    for i, file in enumerate(sorted(data_files), 1):
-        print(f"{i}. {file}")
-
-    try:
-        choice1 = int(input("첫 번째 파일 번호: ")) - 1
-        choice2 = int(input("두 번째 파일 번호: ")) - 1
-
-        file1 = sorted(data_files)[choice1]
-        file2 = sorted(data_files)[choice2]
-
-        print(f"\n비교 대상:")
-        print(f"  파일 1: {file1}")
-        print(f"  파일 2: {file2}")
-
-        # 데이터 로드 및 기본 비교
-        df1 = loader.load_saved_dataset(file1)
-        df2 = loader.load_saved_dataset(file2)
-
-        if df1 is None or df2 is None:
-            print("파일 로드 실패")
-            return
-
-        # 기본 통계 비교
-        print(f"\n기본 통계 비교:")
-        print(f"{'구분':<20} {'파일 1':<15} {'파일 2':<15} {'차이':<15}")
-        print("-" * 70)
-
-        # 샘플 수
-        print(f"{'샘플 수':<20} {len(df1):<15,} {len(df2):<15,} {len(df2) - len(df1):<15,}")
-
-        # 평균 길이
-        avg_len1 = df1['output'].str.len().mean()
-        avg_len2 = df2['output'].str.len().mean()
-        print(f"{'평균 Output 길이':<20} {avg_len1:<15.1f} {avg_len2:<15.1f} {avg_len2 - avg_len1:<15.1f}")
-
-        # 고유값 비교
-        if len(df1) == len(df2):
-            differences = 0
-            for i in range(len(df1)):
-                if (df1.iloc[i]['instruction'] != df2.iloc[i]['instruction'] or
-                        df1.iloc[i]['output'] != df2.iloc[i]['output']):
-                    differences += 1
-
-            print(f"{'다른 샘플 수':<20} {'-':<15} {'-':<15} {differences:<15,}")
-            print(f"{'차이 비율':<20} {'-':<15} {'-':<15} {differences / len(df1) * 100:<15.1f}%")
-
-    except (ValueError, IndexError):
-        print("잘못된 선택입니다.")
-
-
-def analyze_strategy_effects(data_files, loader):
-    """노이즈 전략별 효과 분석"""
-    print_separator("노이즈 전략별 효과 분석", "-")
-
-    # 전략별 파일 그룹핑
-    strategies = {'balanced': [], 'grammar_heavy': [], 'semantic_heavy': []}
-
-    for file in data_files:
-        if 'original' in file:
-            continue
-        for strategy in strategies.keys():
-            if strategy.replace('_', '') in file:
-                strategies[strategy].append(file)
-                break
-
-    # 결과 출력
-    print("전략별 파일 분포:")
-    for strategy, files in strategies.items():
-        print(f"  {strategy}: {len(files)}개 파일")
-        for file in files:
-            file_info = parse_filename_info(file)
-            print(f"    - {file} (노이즈: {file_info['noise_percent']}, 샘플: {file_info['samples']})")
-
-    # 전략별 효과 비교 (데모 파일 기준)
-    demo_strategies = {k: [f for f in v if 'demo' in f] for k, v in strategies.items()}
-    demo_strategies = {k: v for k, v in demo_strategies.items() if v}
-
-    if len(demo_strategies) > 1:
-        print(f"\n데모 파일 기준 전략 효과 비교:")
-
-        # 원본 데모 파일 찾기
-        original_demo = [f for f in data_files if 'original' in f and 'demo' in f]
-        if original_demo:
-            original_df = loader.load_saved_dataset(original_demo[0])
-            if original_df is not None:
-                strategy_results = {}
-
-                for strategy, files in demo_strategies.items():
-                    if not files:
-                        continue
-
-                    file = files[0]  # 첫 번째 파일 사용
-                    noisy_df = loader.load_saved_dataset(file)
-                    if noisy_df is None:
-                        continue
-
-                    # 변경 분석
-                    changes = 0
-                    total_length_change = 0
-
-                    for i in range(len(original_df)):
-                        if (original_df.iloc[i]['output'] != noisy_df.iloc[i]['output']):
-                            changes += 1
-                            total_length_change += len(noisy_df.iloc[i]['output']) - len(original_df.iloc[i]['output'])
-
-                    strategy_results[strategy] = {
-                        'changes': changes,
-                        'change_ratio': changes / len(original_df),
-                        'avg_length_change': total_length_change / changes if changes > 0 else 0
-                    }
-
-                # 결과 출력
-                print(f"{'전략':<15} {'변경 샘플':<12} {'변경 비율':<12} {'평균 길이 변화':<15}")
-                print("-" * 60)
-
-                for strategy, result in strategy_results.items():
-                    print(f"{strategy:<15} {result['changes']:<12} "
-                          f"{result['change_ratio'] * 100:<11.1f}% {result['avg_length_change']:<15.1f}")
-
-
-def run_comprehensive_analysis(data_files, loader):
-    """전체 종합 분석"""
-    print_separator("전체 종합 분석", "=", 70)
-
-    print("종합 분석을 시작합니다...")
-    print("   이 분석은 모든 데이터를 종합적으로 분석하며 시간이 걸릴 수 있습니다.")
-
-    confirm = input("계속 진행하시겠습니까? (y/N): ").strip().lower()
-    if confirm != 'y':
-        return
-
-    # 1. 파일 기본 정보
-    print("\n" + "=" * 50)
-    print("1. 파일 기본 정보")
-    print("=" * 50)
-    analyze_file_basic_info(data_files)
-
-    # 2. 데모 파일 분석
-    demo_files = [f for f in data_files if "demo" in f and "original" not in f]
-    original_files = [f for f in data_files if "original" in f]
-
-    if demo_files:
-        print("\n" + "=" * 50)
-        print("2. 데모 파일 상세 분석")
-        print("=" * 50)
-        analyze_demo_files_detailed(demo_files, original_files, loader)
-
-    # 3. 전략별 효과 분석
-    print("\n" + "=" * 50)
-    print("3. 전략별 효과 분석")
-    print("=" * 50)
-    analyze_strategy_effects(data_files, loader)
-
-    # 4. 최종 요약
-    print("\n" + "=" * 50)
-    print("4. 최종 요약")
-    print("=" * 50)
-
-    total_files = len(data_files)
-    original_count = len([f for f in data_files if 'original' in f])
-    demo_count = len([f for f in data_files if 'demo' in f and 'original' not in f])
-    full_count = len([f for f in data_files if 'full' in f and 'original' not in f])
-
-    print(f"전체 현황:")
-    print(f"  - 총 파일 수: {total_files}개")
-    print(f"  - 원본 파일: {original_count}개")
-    print(f"  - 데모 실험: {demo_count}개")
-    print(f"  - 전체 실험: {full_count}개")
-
-    # 사용 가능한 전략 요약
-    strategies_found = set()
-    for file in data_files:
-        if 'balanced' in file:
-            strategies_found.add('balanced')
-        elif 'grammar' in file:
-            strategies_found.add('grammar_heavy')
-        elif 'semantic' in file:
-            strategies_found.add('semantic_heavy')
-
-    print(f"  - 테스트된 전략: {', '.join(strategies_found)}")
-
-    # DataInf 실험 준비도 체크
-    print(f"\nDataInf 실험 준비도:")
-
-    has_original = original_count > 0
-    has_noisy = (demo_count + full_count) > 0
-    has_multiple_ratios = len(set(parse_filename_info(f)['noise_percent']
-                                  for f in data_files if parse_filename_info(f)['noise_percent'] != 'N/A')) > 1
-
-    print(f"  - 원본 데이터: {'O' if has_original else 'X'}")
-    print(f"  - 노이즈 데이터: {'O' if has_noisy else 'X'}")
-    print(f"  - 다양한 노이즈 비율: {'O' if has_multiple_ratios else 'X'}")
-
-    readiness = sum([has_original, has_noisy, has_multiple_ratios])
-    if readiness == 3:
-        print(f"  준비도: 완벽 (3/3) - DataInf 실험 진행 가능!")
-    elif readiness == 2:
-        print(f"  준비도: 양호 (2/3) - 추가 데이터 생성 권장")
-    else:
-        print(f"  준비도: 부족 ({readiness}/3) - 데이터 생성 필요")
-
-    print(f"\n종합 분석이 완료되었습니다!")
+def estimate_noisy_indices(original_df, noisy_df, dataset_name):
+    """데이터셋별 노이즈 인덱스 추정"""
+    from .noise_injection import MultiDatasetNoiseInjector
+
+    injector = MultiDatasetNoiseInjector()
+    config = injector.dataset_configs.get(dataset_name, {})
+    text_columns = config.get('text_columns', [])
+
+    if not text_columns:
+        # fallback: 모든 문자열 컬럼 비교
+        text_columns = [col for col in original_df.columns if original_df[col].dtype == 'object']
+
+    noisy_indices = []
+    max_samples = min(len(original_df), len(noisy_df))
+
+    for i in range(max_samples):
+        for col in text_columns:
+            if col in original_df.columns and col in noisy_df.columns:
+                if str(original_df.iloc[i][col]) != str(noisy_df.iloc[i][col]):
+                    noisy_indices.append(i)
+                    break
+
+    return noisy_indices
+
+
+def analyze_dataset_characteristics(df, dataset_name):
+    """데이터셋별 특성 분석"""
+    print(f"   총 샘플 수: {len(df):,}개")
+    print(f"   컬럼: {list(df.columns)}")
+
+    if dataset_name == 'alpaca':
+        if 'instruction' in df.columns:
+            inst_lengths = df['instruction'].str.len()
+            print(f"   Instruction 길이 - 평균: {inst_lengths.mean():.1f}, 범위: {inst_lengths.min()}-{inst_lengths.max()}")
+        if 'output' in df.columns:
+            out_lengths = df['output'].str.len()
+            print(f"   Output 길이 - 평균: {out_lengths.mean():.1f}, 범위: {out_lengths.min()}-{out_lengths.max()}")
+
+    elif dataset_name == 'gsm8k':
+        if 'question' in df.columns:
+            q_lengths = df['question'].str.len()
+            print(f"   Question 길이 - 평균: {q_lengths.mean():.1f}, 범위: {q_lengths.min()}-{q_lengths.max()}")
+        if 'answer' in df.columns:
+            a_lengths = df['answer'].str.len()
+            print(f"   Answer 길이 - 평균: {a_lengths.mean():.1f}, 범위: {a_lengths.min()}-{a_lengths.max()}")
+
+    elif dataset_name == 'sst2':
+        if 'sentence' in df.columns:
+            sent_lengths = df['sentence'].str.len()
+            print(f"   Sentence 길이 - 평균: {sent_lengths.mean():.1f}, 범위: {sent_lengths.min()}-{sent_lengths.max()}")
+        if 'label' in df.columns:
+            label_dist = df['label'].value_counts()
+            print(f"   라벨 분포: {dict(label_dist)}")
+
+    elif dataset_name == 'mrpc':
+        if 'sentence1' in df.columns and 'sentence2' in df.columns:
+            s1_lengths = df['sentence1'].str.len()
+            s2_lengths = df['sentence2'].str.len()
+            print(f"   Sentence1 길이 - 평균: {s1_lengths.mean():.1f}")
+            print(f"   Sentence2 길이 - 평균: {s2_lengths.mean():.1f}")
+        if 'label' in df.columns:
+            label_dist = df['label'].value_counts()
+            print(f"   라벨 분포: {dict(label_dist)}")
 
 
 if __name__ == "__main__":
     # 테스트 실행 (직접 실행시)
-    print("=== Analysis 모듈 테스트 ===")
+    print("=== Multi-Dataset Analysis 모듈 테스트 ===")
     run_quality_analysis()
